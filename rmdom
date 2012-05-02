@@ -1,0 +1,280 @@
+#!/bin/bash
+
+if [ ! $1 ]
+then
+   exit
+fi
+
+if [ "$2" = "" ]
+then
+   echo -en "\nconfirm changes? " ; read c
+else
+   c="$2"
+fi
+
+if [ "$c" = "y" -o "$c" = "c" ]
+then
+   conf="c"
+   wq=""
+   quiet=""
+else
+   conf=""
+   wq="-c wq"
+   quiet="-e"
+fi
+
+t=$(date '+%Y%m%d-%H%M%S')
+s=$(hostname -s)
+f1="virtusertable sendmail.cw /usr/local/apache/conf/httpd.conf sites.$s"
+f2="/home/.htpasswd"
+
+cd /etc
+if [ ! -d /etc/.hist ]
+then
+   mkdir /etc/.hist
+   chmod 700 /etc/.hist
+   chown root.root /etc/.hist
+fi
+
+i1="$1"
+
+if [ "${i1%.*}" != "${i1}" ]
+then
+   userdom="dom"
+else
+   userdom="user"
+fi
+
+if [ "$(hostname -s)" = "west" ] || [ "$(hostname -s)" = "usm2" ]
+then
+   g9=$(egrep "(^|;)$i1;" allsites)
+   f1="$f1 allsites"
+   f2="$f2 allusers"
+else
+   g9=$(egrep "(^|;)$i1;" sites.$s)
+fi
+
+if [ ! "$g9" ]
+then
+   echo "$i1 not on this system - exitting"
+   sleep 1
+   exit
+fi
+
+rmfiledir ()
+{
+ filedir="${1}"
+ rmargs=""
+ verbose=""
+
+ if [ "${2}" = "v" ]
+ then
+    verbose="v"
+ fi
+
+ if [ -d "$filedir" ]
+ then
+    rmargs="-rf$verbose"
+ elif [ -f "$filedir" ]
+ then
+    rmargs="-f$verbose"
+ fi
+    
+ if [ "$rmargs" ] 
+ then
+    if [ "$conf" = "c" ]
+    then
+       echo -en "\nremove $filedir? " ; read q
+    else
+       echo -e "\nremove $filedir " ; sleep 1
+    fi
+    if [ "$q" = "y" -o "$conf" != "c" ]
+    then
+       rm $rmargs $filedir
+    else
+       echo "not removed!"
+    fi
+ else
+    echo -e "\n$filedir does not exist\n" ; sleep 1
+ fi
+}
+
+for g in $(echo "$g9")
+do
+ 
+ u=$(echo $g|cut -d\; -f1)
+ d=$(echo $g|cut -d\; -f2)
+ n=$(echo $g|cut -d\; -f3)
+ i=$(echo $g|cut -d\; -f4)
+ 
+ if [ "$u" = "" ]
+ then
+    echo "error - no user!!!"
+    exit
+ fi
+
+ if [ "$d" = "" ]
+ then
+    echo "error - no dir!!!"
+    exit
+ fi
+
+ if [ "$n" = "" ]
+ then
+    echo "error - no dom!!!"
+    exit
+ fi
+
+ echo -en "\n$g"
+
+ if [ "$userdom" = "user" -a "$3" != "n" ]
+ then
+    echo -n " - remove? " ; read q
+    if [ "$q" != "y" ]
+    then
+       break
+    fi
+ else
+    echo " "
+ fi
+ 
+ for f in `egrep -l "(^|@|;| )$n" $f1`
+ do
+    echo -e "\n$f" ; sleep 1
+    if [ "$q" = "$q" ]
+    then
+       b="${f##*/}"
+       h="/etc/.hist/$b.$t"
+       cp -p $f $h
+ 
+       if [ "$b" = "virtusertable" ]
+       then
+          if [ "$(hostname -s)" = "west" -a "$4" != "y" ]
+          then
+             vu="$(grep "@$n\W" /etc/virtusertable)"
+             echo "$vu"
+             p3="$(echo "$vu"|cut -f2|grep -v '@'|sort -u)"
+             for z3 in $p3
+             do
+                if [ `grep "\W$z3$" /etc/virtusertable|wc -l` -lt 2 ]
+                then
+                   echo "$z3"
+                   rmpop3 "$z3" "$4"
+                fi
+             done
+          fi
+          vim $quiet -c "%s/^.*@$n\t.*$/###/$conf" -c "g/^###$/d" $wq $f
+       fi
+ 
+       if [ "$b" = "sendmail.cw" ]
+       then
+          vim $quiet -c "%s/^$n$/###/$conf" -c "g/^###$/d" $wq $f
+       fi
+ 
+       if [ "$b" = "httpd.conf" ]
+       then
+          if [ "$d" = "null" ]
+          then
+ 
+             vim $quiet -c "%s/\( \*\.\| \)$n/g$conf" $wq $f
+ 
+          else
+ 
+             vim $quiet -c "/ $n/" -c "?<Virt?;/<\/Virt/+s/^.*$/###/$conf" \
+                        -c "g/^###$/d" $wq $f
+ 
+             vv=$(grep "$i" $f)
+             vn=$(echo "$vv" | grep NameVirtualHost | wc -l)
+             vi=$(echo "$vv" | grep "<VirtualHost $i>" | wc -l)
+             vf=$(echo "$vv" | grep -v "<VirtualHost $i>"|grep -v NameVirtualHost|wc -l)
+             if [ $vn -gt 0 ]
+             then
+                if [ $vi -lt 2 -a $vf -lt 1 ]
+                then
+                 vim $quiet -c "%s/^NameVirtualHost $i$/###/$conf" -c "g/^###$/d" $wq $f
+                fi
+             fi
+          fi
+       fi
+ 
+       if [ "$b" = "sites.$s" ] || [ "$b" = "allsites" ]
+       then
+          vim $quiet -c "%s/^.*;$n;.*$/###/$conf" -c "g/^###$/d" $wq $f
+       fi
+    fi
+ done
+ 
+ if [ "$(hostname -s)" != "west" ]
+ then
+
+    rmfiledir "/log/$u/$d"
+ 
+    rmfiledir "/home/$u/$d"
+ 
+    rmfiledir "/usr/local/frontpage/$i:80.cnf" 
+ 
+    rmfiledir "/usr/local/frontpage/www.$n:80.cnf"
+ fi
+
+done
+ 
+if [ "$userdom" = "user" ]
+then
+ 
+ for f in `egrep -l "^$i1(:|,)" $f2`
+ do
+    echo -e "\n$f" ; sleep 1
+    if [ "$q" = "$q" ]
+    then
+       b="${f##*/}"
+       h="/etc/.hist/$b.$t"
+       cp -p $f $h
+ 
+       if [ "$b" = "allusers" ]
+       then
+          vim $quiet -c "%s/^$i1,.*$/###/$conf" -c "g/^###$/d" $wq $f
+       fi
+ 
+       if [ "$b" = ".htpasswd" ]
+       then
+          vim $quiet -c "%s/^$i1:.*$/###/$conf" -c "g/^###$/d" $wq $f
+       fi
+    fi
+ done 
+
+ if [ "$(grep "^$i1:" /etc/passwd)" -a "$(hostname -s)" != "west" ]
+ then
+
+    if [ "$5" != "n" ]
+    then
+       echo -en "\nremove user? " ; read q
+    fi
+ 
+    if [ "$5" = "n" -o "$q" = "y" ]
+    then
+
+       rmfiledir "/log/$i1" "v"
+
+       rmfiledir "/home/$i1" ""
+
+       /usr/sbin/userdel $i1
+       /usr/sbin/groupdel $i1
+
+    fi
+ fi
+    
+fi
+ 
+if [ "$(hostname -s)" != "west" ]
+then
+    if [ "$6" = "" ]
+    then
+        echo -en "\nrestart http? " ; read q
+    fi
+
+    if [ "$6" = "y" -o "$q" = "y" ]
+    then
+        /usr/bin/apres
+    fi
+fi
+
